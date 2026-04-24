@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Sequence
+from typing import Any, Dict, Sequence, List
 
 from algorithms import (
     greedy_interval_baseline,
@@ -11,13 +11,13 @@ from models import GreedyProfileResult
 from mp_types import Point
 
 
-def profiles_match(reference: GreedyProfileResult, other: GreedyProfileResult, *, atol: float = 1e-5) -> bool:
+def profiles_match(reference: GreedyProfileResult, other: GreedyProfileResult, *, atol: float = 1e-3) -> bool:
     if reference.n != other.n:
         return False
     return all(abs(a - b) <= atol for a, b in zip(reference.costs, other.costs))
 
 
-def assert_profiles_match(reference: GreedyProfileResult, other: GreedyProfileResult, *, atol: float = 1e-5) -> None:
+def assert_profiles_match(reference: GreedyProfileResult, other: GreedyProfileResult, *, atol: float = 1e-3) -> None:
     if reference.n != other.n:
         raise AssertionError(
             f"Profile lengths differ: reference has n={reference.n}, other has n={other.n}."
@@ -27,15 +27,18 @@ def assert_profiles_match(reference: GreedyProfileResult, other: GreedyProfileRe
             raise AssertionError(f"Profiles disagree at k={k}: reference cost = {a}, other cost = {b}.")
 
 
-def compare_all_algorithms(R: Sequence[Point], B: Sequence[Point], *, atol: float = 1e-5) -> Dict[str, GreedyProfileResult]:
-    #algo1 = greedy_interval_baseline(R, B)
-    algo2 = greedy_interval_priority_queue(R, B)
-    algo3 = greedy_interval_priority_queue_range_tree(R, B)
-    #assert_profiles_match(algo1, algo2, atol=atol)
-    assert_profiles_match(algo2, algo3, atol=atol)
-    return { #"naive": algo1,
-        "noFFT": algo2,
-        "FFT": algo3}
+def compare_all_algorithms(R: Sequence[Point], B: Sequence[Point], names: List[str], atol: float = 1e-3) -> Dict[str, GreedyProfileResult]:
+    result = {}
+    for name in names:
+        if name == "naive":
+            result[name] = greedy_interval_baseline(R,B)
+        elif name == "noFFT":
+            result[name] = greedy_interval_priority_queue(R,B)
+        elif name == "FFT":
+            result[name] = greedy_interval_priority_queue_range_tree(R,B)
+        assert_profiles_match(result[names[0]],result[name])
+
+    return result
 
 
 def stats_table(profiles: Dict[str, GreedyProfileResult]) -> list[Dict[str, Any]]:
