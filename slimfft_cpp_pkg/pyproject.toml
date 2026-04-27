@@ -1,0 +1,12 @@
+[build-system]
+requires = ["scikit-build-core", "pybind11"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "slimfft-cpp"
+version = "0.1.0"
+description = "C++ slimFFT Wasserstein profile extension"
+requires-python = ">=3.10"
+
+[tool.scikit-build]
+wheel.packages = ["slimfft_cpp"]
