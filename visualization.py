@@ -7,7 +7,8 @@ from matplotlib.widgets import Button
 
 from models import CompactInterval, GreedyProfileResult
 from mp_types import Point
-from utils import apply_delta_to_solution, undo_delta_from_solution, validate_disjoint_sorted_intervals, validate_instance
+from utils import apply_delta_to_solution, undo_delta_from_solution, validate_disjoint_sorted_intervals, \
+    validate_instance, recover_solution_at_k
 
 
 class GreedyProfileStepper:
@@ -197,6 +198,16 @@ def describe_solution_step(profile: GreedyProfileResult, k: int) -> str:
     return " | ".join(lines)
 
 
+def _profile_solution_at(profile, k: int):
+    """
+    Support both full GreedyProfileResult and LightGreedyProfileResult.
+    """
+    if hasattr(profile, "solution_at"):
+        return profile.solution_at(k)
+    if hasattr(profile, "deltas"):
+        return recover_solution_at_k(profile.deltas, k)
+    raise TypeError("Profile does not support solution recovery.")
+
 def plot_solution_at_k(
     R: Sequence[Point],
     B: Sequence[Point],
@@ -206,7 +217,7 @@ def plot_solution_at_k(
     ax=None,
     show_pairs: bool = True,
 ) -> None:
-    intervals = profile.solution_at(k)
+    intervals = _profile_solution_at(profile, k)
     plot_solution(R, B, intervals, ax=ax, title=describe_solution_step(profile, k), show_pairs=show_pairs)
 
 

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 from typing import Optional
+from typing import List, Optional, Sequence, Tuple
 
 from models import CandidateEvaluation, CompactInterval
 
@@ -144,3 +146,219 @@ class DynamicIntervalSet:
         new_node = _TreapNode(interval=delta.merged_interval, priority=_treap_priority(delta.merged_interval))
         _treap_update(new_node)
         self.root = _treap_merge(left_tree, _treap_merge(new_node, right_tree))
+
+class _IntervalNode:
+    __slots__ = (
+        "interval",
+        "prio",
+        "left",
+        "right",
+        "subtree_cost_sum",
+        "subtree_pair_sum",
+        "subtree_max_red_end",
+    )
+
+    def __init__(self, interval: "CompactInterval"):
+        self.interval = interval
+        self.prio = random.random()
+        self.left: Optional["_IntervalNode"] = None
+        self.right: Optional["_IntervalNode"] = None
+
+        self.subtree_cost_sum = float(interval.cost)
+        self.subtree_pair_sum = int(interval.size)
+        self.subtree_max_red_end = int(interval.red_end)
+
+
+def _subtree_cost(node: Optional[_IntervalNode]) -> float:
+    return 0.0 if node is None else node.subtree_cost_sum
+
+
+def _subtree_pairs(node: Optional[_IntervalNode]) -> int:
+    return 0 if node is None else node.subtree_pair_sum
+
+
+def _subtree_max_red_end(node: Optional[_IntervalNode]) -> int:
+    return -10**18 if node is None else node.subtree_max_red_end
+
+
+def _pull_interval(node: Optional[_IntervalNode]) -> None:
+    if node is None:
+        return
+    node.subtree_cost_sum = (
+        float(node.interval.cost)
+        + _subtree_cost(node.left)
+        + _subtree_cost(node.right)
+    )
+    node.subtree_pair_sum = (
+        int(node.interval.size)
+        + _subtree_pairs(node.left)
+        + _subtree_pairs(node.right)
+    )
+    node.subtree_max_red_end = max(
+        int(node.interval.red_end),
+        _subtree_max_red_end(node.left),
+        _subtree_max_red_end(node.right),
+    )
+
+
+def _merge_interval_treaps(
+    a: Optional[_IntervalNode],
+    b: Optional[_IntervalNode],
+) -> Optional[_IntervalNode]:
+    if a is None:
+        return b
+    if b is None:
+        return a
+    if a.prio < b.prio:
+        a.right = _merge_interval_treaps(a.right, b)
+        _pull_interval(a)
+        return a
+    else:
+        b.left = _merge_interval_treaps(a, b.left)
+        _pull_interval(b)
+        return b
+
+
+def _split_interval_treap(
+    root: Optional[_IntervalNode],
+    key: int,
+) -> Tuple[Optional[_IntervalNode], Optional[_IntervalNode]]:
+    """
+    Split by red_start:
+      left  = intervals with red_start < key
+      right = intervals with red_start >= key
+    """
+    if root is None:
+        return None, None
+
+    if root.interval.red_start < key:
+        a, b = _split_interval_treap(root.right, key)
+        root.right = a
+        _pull_interval(root)
+        return root, b
+    else:
+        a, b = _split_interval_treap(root.left, key)
+        root.left = b
+        _pull_interval(root)
+        return a, root
+
+
+def _rightmost(node: Optional[_IntervalNode]) -> Optional[_IntervalNode]:
+    if node is None:
+        return None
+    while node.right is not None:
+        node = node.right
+    return node
+
+
+def _inorder_collect(
+    node: Optional[_IntervalNode],
+    out: List["CompactInterval"],
+) -> None:
+    if node is None:
+        return
+    _inorder_collect(node.left, out)
+    out.append(node.interval)
+    _inorder_collect(node.right, out)
+
+class DynamicIntervalSetSummary:
+    """
+    Maintains the current disjoint interval solution using a treap with subtree
+    aggregates. Candidate evaluation never scans the whole solution.
+
+    Expected time:
+      - range_summary: O(log m)
+      - apply_interval: O(log m)
+      - current cost/size: O(1)
+    """
+
+    def __init__(self):
+        self.root: Optional[_IntervalNode] = None
+        self.total_cost: float = 0.0
+        self.total_size: int = 0
+
+    def _restore(
+        self,
+        a: Optional[_IntervalNode],
+        b: Optional[_IntervalNode],
+        c: Optional[_IntervalNode],
+    ) -> None:
+        self.root = _merge_interval_treaps(a, _merge_interval_treaps(b, c))
+
+    def range_summary(
+        self,
+        red_start: int,
+        red_end: int,
+    ) -> Tuple[float, int]:
+        """
+        Return aggregate (swallowed_cost, swallowed_pairs) for all current
+        intervals whose red_start lies in [red_start, red_end].
+
+        This is the logarithmic replacement for scanning the current solution.
+        """
+        a, bc = _split_interval_treap(self.root, red_start)
+        b, c = _split_interval_treap(bc, red_end + 1)
+
+        # Defensive check against partial overlap from the left.
+        pred = _rightmost(a)
+        if pred is not None and pred.interval.red_end >= red_start:
+            self._restore(a, b, c)
+            raise ValueError(
+                "Candidate interval partially overlaps an existing interval on the left."
+            )
+
+        # Defensive check against partial overlap inside the middle block.
+        if b is not None and _subtree_max_red_end(b) > red_end:
+            self._restore(a, b, c)
+            raise ValueError(
+                "Candidate interval partially overlaps an existing interval in the middle block."
+            )
+
+        swallowed_cost = _subtree_cost(b)
+        swallowed_pairs = _subtree_pairs(b)
+
+        self._restore(a, b, c)
+        return swallowed_cost, swallowed_pairs
+
+    def apply_interval(
+        self,
+        merged_interval: "CompactInterval",
+    ) -> Tuple[float, int]:
+        """
+        Replace all current intervals with red_start in
+        [merged.red_start, merged.red_end] by merged_interval.
+
+        Returns:
+            (swallowed_cost, swallowed_pairs)
+        """
+        a, bc = _split_interval_treap(self.root, merged_interval.red_start)
+        b, c = _split_interval_treap(bc, merged_interval.red_end + 1)
+
+        pred = _rightmost(a)
+        if pred is not None and pred.interval.red_end >= merged_interval.red_start:
+            self._restore(a, b, c)
+            raise ValueError(
+                "Chosen interval partially overlaps an existing interval on the left."
+            )
+        if b is not None and _subtree_max_red_end(b) > merged_interval.red_end:
+            self._restore(a, b, c)
+            raise ValueError(
+                "Chosen interval partially overlaps an existing interval in the middle block."
+            )
+
+        swallowed_cost = _subtree_cost(b)
+        swallowed_pairs = _subtree_pairs(b)
+
+        new_node = _IntervalNode(merged_interval)
+        self.root = _merge_interval_treaps(a, _merge_interval_treaps(new_node, c))
+
+        self.total_cost = self.total_cost - swallowed_cost + float(merged_interval.cost)
+        self.total_size = self.total_size - swallowed_pairs + int(merged_interval.size)
+
+        return swallowed_cost, swallowed_pairs
+
+    def to_sorted_intervals(self) -> List["CompactInterval"]:
+        out: List["CompactInterval"] = []
+        _inorder_collect(self.root, out)
+        return out
+

@@ -115,3 +115,51 @@ class GreedyProfileResult:
         for i in range(k):
             solution = apply_delta_to_solution(solution, self.deltas[i])
         return solution
+
+@dataclass(frozen=True)
+class LightCandidateEvaluation:
+    """
+    Cheap accepted-delta record.
+
+    No swallowed interval list is stored. Instead we only store the aggregate
+    statistics needed for verification / summaries, and recover solutions later
+    by replaying accepted merged intervals.
+    """
+    left_endpoint: ColoredPoint
+    right_endpoint: ColoredPoint
+    merged_interval: CompactInterval
+    delta_cost: float
+    swallowed_cost: float
+    swallowed_pairs: int
+
+    @property
+    def interval(self) -> Tuple[float, float]:
+        return (self.left_endpoint.position, self.right_endpoint.position)
+
+    @property
+    def added_pairs(self) -> int:
+        return self.merged_interval.size - self.swallowed_pairs
+
+
+@dataclass(frozen=True)
+class LightGreedyProfileResult:
+    costs: List[float]
+    deltas: List[LightCandidateEvaluation]
+    algorithm_name: str
+    stats: Optional["AlgorithmStats"] = None
+
+    @property
+    def n(self) -> int:
+        return len(self.costs) - 1
+
+    def cost_at(self, k: int) -> float:
+        if not (0 <= k <= self.n):
+            raise ValueError(f"k must lie in [0, {self.n}].")
+        return float(self.costs[k])
+
+    def step_at(self, k: int) -> Optional[LightCandidateEvaluation]:
+        if not (0 <= k <= self.n):
+            raise ValueError(f"k must lie in [0, {self.n}].")
+        if k == 0:
+            return None
+        return self.deltas[k - 1]

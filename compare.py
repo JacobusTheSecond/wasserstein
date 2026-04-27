@@ -5,10 +5,11 @@ from typing import Any, Dict, Sequence, List
 from algorithms import (
     greedy_interval_baseline,
     greedy_interval_priority_queue,
-    greedy_interval_priority_queue_range_tree,
+    greedy_interval_priority_queue_range_tree, greedy_interval_priority_queue_summary,
 )
 from models import GreedyProfileResult
 from mp_types import Point
+from utils import light_to_full_greedy_profile
 
 
 def profiles_match(reference: GreedyProfileResult, other: GreedyProfileResult, *, atol: float = 1e-3) -> bool:
@@ -36,6 +37,8 @@ def compare_all_algorithms(R: Sequence[Point], B: Sequence[Point], names: List[s
             result[name] = greedy_interval_priority_queue(R,B)
         elif name == "FFT":
             result[name] = greedy_interval_priority_queue_range_tree(R,B)
+        elif name == "slimFFT":
+            result[name] = light_to_full_greedy_profile(greedy_interval_priority_queue_summary(R,B))
         assert_profiles_match(result[names[0]],result[name])
 
     return result
