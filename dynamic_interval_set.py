@@ -87,6 +87,12 @@ def _treap_collect_inorder(root: Optional[_TreapNode], out: list[CompactInterval
     out.append(root.interval)
     _treap_collect_inorder(root.right, out)
 
+def _collect_intervals_inorder(node: Optional[_IntervalNode], out: List[CompactInterval]) -> None:
+    if node is None:
+        return
+    _collect_intervals_inorder(node.left, out)
+    out.append(node.interval)
+    _collect_intervals_inorder(node.right, out)
 
 class DynamicIntervalSet:
     """Dynamic set of disjoint matched intervals with O(log n + t) range updates."""
@@ -356,6 +362,54 @@ class DynamicIntervalSetSummary:
         self.total_size = self.total_size - swallowed_pairs + int(merged_interval.size)
 
         return swallowed_cost, swallowed_pairs
+
+    def apply_interval_with_extract(
+        self,
+        merged_interval: CompactInterval,
+    ) -> Tuple[List[CompactInterval], float, int]:
+        """
+        Replace all current intervals with red_start in
+        [merged_interval.red_start, merged_interval.red_end] by merged_interval.
+
+        Returns
+        -------
+        subsumed_intervals : list[CompactInterval]
+            The swallowed intervals, in sorted order.
+        swallowed_cost : float
+        swallowed_pairs : int
+
+        Expected time:
+            O(log m + t), where t is the number of swallowed intervals.
+        Across a whole replay, sum(t) = O(n).
+        """
+        a, bc = _split_interval_treap(self.root, merged_interval.red_start)
+        b, c = _split_interval_treap(bc, merged_interval.red_end + 1)
+
+        pred = _rightmost(a)
+        if pred is not None and pred.interval.red_end >= merged_interval.red_start:
+            self._restore(a, b, c)
+            raise ValueError(
+                "Chosen interval partially overlaps an existing interval on the left."
+            )
+        if b is not None and _subtree_max_red_end(b) > merged_interval.red_end:
+            self._restore(a, b, c)
+            raise ValueError(
+                "Chosen interval partially overlaps an existing interval in the middle block."
+            )
+
+        subsumed_intervals: List[CompactInterval] = []
+        _collect_intervals_inorder(b, subsumed_intervals)
+
+        swallowed_cost = _subtree_cost(b)
+        swallowed_pairs = _subtree_pairs(b)
+
+        new_node = _IntervalNode(merged_interval)
+        self.root = _merge_interval_treaps(a, _merge_interval_treaps(new_node, c))
+
+        self.total_cost = self.total_cost - swallowed_cost + float(merged_interval.cost)
+        self.total_size = self.total_size - swallowed_pairs + int(merged_interval.size)
+
+        return subsumed_intervals, swallowed_cost, swallowed_pairs
 
     def to_sorted_intervals(self) -> List["CompactInterval"]:
         out: List["CompactInterval"] = []

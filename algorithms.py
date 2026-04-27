@@ -13,7 +13,8 @@ from candidates import (
 from dynamic_interval_set import DynamicIntervalSet, DynamicIntervalSetSummary
 from models import AlgorithmStats, CandidateEvaluation, GreedyProfileResult, LightCandidateEvaluation, \
     LightGreedyProfileResult
-from queries import BalancedIntervalSquaredCostDataStructure, build_colored_sequence
+from queries import BalancedIntervalSquaredCostDataStructure, build_colored_sequence, \
+    LazyBalancedIntervalSquaredCostDataStructure
 from mp_types import Point
 from utils import apply_delta_to_solution, candidate_key, current_total_cost, current_total_size, validate_instance
 
@@ -190,12 +191,111 @@ def greedy_interval_priority_queue(R: Sequence[Point], B: Sequence[Point]) -> Gr
         ),
     )
 
-
 def greedy_interval_priority_queue_range_tree(R: Sequence[Point], B: Sequence[Point]) -> GreedyProfileResult:
     validate_instance(R, B)
     total_start = perf_counter()
     t0 = perf_counter()
     ds = BalancedIntervalSquaredCostDataStructure(R, B)
+    interval_set = DynamicIntervalSet()
+    ds_time = perf_counter() - t0
+
+    n = len(R)
+    all_points = ds.all_points
+    m = len(all_points)
+    prev_idx = [-1] + [i for i in range(m - 1)]
+    next_idx = [i + 1 for i in range(m - 1)] + [-1]
+    alive = [True] * m
+    costs = [0.0]
+    deltas = []
+    heap = []
+    serial_counter = count()
+
+    query_count = candidate_count = heap_pushes = heap_pops = 0
+    candidate_processing_time = selection_time = solution_update_time = 0.0
+
+    for left_id in range(m - 1):
+        t0 = perf_counter()
+        pushed = _push_candidate_fast_dynamic(heap, serial_counter, all_points, interval_set, left_id, left_id + 1, ds)
+        candidate_processing_time += perf_counter() - t0
+        if pushed:
+            query_count += 1
+            candidate_count += 1
+            heap_pushes += 1
+
+    for k in range(1, n + 1):
+        t0 = perf_counter()
+        chosen: Optional[CandidateEvaluation] = None
+        while heap:
+            _, _, candidate = heappop(heap)
+            heap_pops += 1
+            if not _candidate_is_valid(candidate, alive, prev_idx, next_idx):
+                continue
+            refreshed = evaluate_candidate_fast_dynamic(ds, interval_set, candidate.left_endpoint, candidate.right_endpoint)
+            if candidate_key(refreshed) != candidate_key(candidate):
+                heappush(heap, (candidate_key(refreshed), next(serial_counter), refreshed))
+                heap_pushes += 1
+                query_count += 1
+                candidate_count += 1
+                continue
+            chosen = refreshed
+            break
+        selection_time += perf_counter() - t0
+        if chosen is None:
+            raise RuntimeError("Priority queue became empty before the matching was complete.")
+
+        t0 = perf_counter()
+        interval_set.apply_candidate(chosen)
+        left_id = chosen.left_endpoint.uid
+        right_id = chosen.right_endpoint.uid
+        left_neighbor = prev_idx[left_id]
+        right_neighbor = next_idx[right_id]
+        alive[left_id] = alive[right_id] = False
+        if left_neighbor != -1:
+            next_idx[left_neighbor] = right_neighbor
+        if right_neighbor != -1:
+            prev_idx[right_neighbor] = left_neighbor
+        prev_idx[left_id] = next_idx[left_id] = -1
+        prev_idx[right_id] = next_idx[right_id] = -1
+        solution_update_time += perf_counter() - t0
+
+        t0 = perf_counter()
+        pushed = _push_candidate_fast_dynamic(heap, serial_counter, all_points, interval_set, left_neighbor, right_neighbor, ds)
+        candidate_processing_time += perf_counter() - t0
+        if pushed:
+            query_count += 1
+            candidate_count += 1
+            heap_pushes += 1
+
+        if interval_set.total_size != k:
+            raise RuntimeError(f"Internal error at step {k}: expected {k} matched pairs, but found {interval_set.total_size}.")
+        costs.append(interval_set.total_cost)
+        deltas.append(chosen)
+
+    total_time = perf_counter() - total_start
+    return GreedyProfileResult(
+        costs=costs,
+        deltas=deltas,
+        algorithm_name="algorithm_3_heap_range_tree_queries",
+        stats=AlgorithmStats(
+            algorithm_name="algorithm_3_heap_range_tree_queries",
+            query_count=query_count,
+            candidate_count=candidate_count,
+            heap_pushes=heap_pushes,
+            heap_pops=heap_pops,
+            query_data_structure_time_seconds=ds_time,
+            candidate_processing_time_seconds=candidate_processing_time,
+            selection_time_seconds=selection_time,
+            solution_update_time_seconds=solution_update_time,
+            total_time_seconds=total_time,
+        ),
+    )
+
+
+def lazy_greedy_interval_priority_queue_range_tree(R: Sequence[Point], B: Sequence[Point]) -> GreedyProfileResult:
+    validate_instance(R, B)
+    total_start = perf_counter()
+    t0 = perf_counter()
+    ds = LazyBalancedIntervalSquaredCostDataStructure(R, B)
     interval_set = DynamicIntervalSet()
     ds_time = perf_counter() - t0
 

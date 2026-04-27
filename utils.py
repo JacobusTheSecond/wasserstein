@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Sequence, Tuple
 from typing import List, Optional, Sequence, Tuple
 
-from dynamic_interval_set import DynamicIntervalSetSummary
 from models import CandidateEvaluation, CompactInterval, GreedyProfileResult, LightGreedyProfileResult, \
     LightCandidateEvaluation
 from mp_types import Point
@@ -147,24 +146,26 @@ def _apply_full_delta_to_solution(
     updated.sort(key=lambda x: (x.red_start, x.blue_start))
     return updated
 
-
 def light_to_full_greedy_profile(
     light_profile: LightGreedyProfileResult,
 ) -> GreedyProfileResult:
     """
     Reconstruct a full GreedyProfileResult from a LightGreedyProfileResult.
 
-    This rebuilds the swallowed interval lists by replaying the accepted deltas.
-    Intended only for debugging / assertions, not for the fast path.
+    This version is O(n log n) expected time:
+      - O(log m) treap work per accepted step
+      - plus O(t) to collect swallowed intervals at that step
+      - and sum of swallowed interval counts over all steps is O(n)
+
+    So total is O(n log n + n) = O(n log n) expected.
     """
-    current_solution: List[CompactInterval] = []
+    interval_set = DynamicIntervalSetSummary()
     full_deltas: List[CandidateEvaluation] = []
 
     for step_index, light_delta in enumerate(light_profile.deltas, start=1):
-        subsumed = _find_subsumed_intervals_by_scan(current_solution, light_delta.merged_interval)
-
-        swallowed_cost = sum(interval.cost for interval in subsumed)
-        swallowed_pairs = sum(interval.size for interval in subsumed)
+        subsumed, swallowed_cost, swallowed_pairs = interval_set.apply_interval_with_extract(
+            light_delta.merged_interval
+        )
 
         if abs(swallowed_cost - light_delta.swallowed_cost) > 1e-9:
             raise ValueError(
@@ -185,8 +186,6 @@ def light_to_full_greedy_profile(
             delta_cost=light_delta.delta_cost,
         )
         full_deltas.append(full_delta)
-
-        current_solution = _apply_full_delta_to_solution(current_solution, light_delta.merged_interval)
 
     return GreedyProfileResult(
         costs=list(light_profile.costs),

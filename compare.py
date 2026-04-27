@@ -1,15 +1,52 @@
 from __future__ import annotations
 
+from time import perf_counter
 from typing import Any, Dict, Sequence, List
 
 from algorithms import (
     greedy_interval_baseline,
     greedy_interval_priority_queue,
-    greedy_interval_priority_queue_range_tree, greedy_interval_priority_queue_summary,
+    greedy_interval_priority_queue_range_tree,
+    greedy_interval_priority_queue_summary,
 )
-from models import GreedyProfileResult
+from models import GreedyProfileResult, AlgorithmStats
 from mp_types import Point
 from utils import light_to_full_greedy_profile
+
+from slimfft_cpp import profile_squared, profile_squared_with_lifetimes
+
+
+def _cpp_profile_result(R: Sequence[Point], B: Sequence[Point]) -> GreedyProfileResult:
+    """
+    Wrap the C++ profile-only solver in a GreedyProfileResult so it can
+    participate in profile comparisons.
+
+    We time the call here and attach a minimal AlgorithmStats object.
+    """
+    t0 = perf_counter()
+    costs = profile_squared(R, B)
+    total_time = perf_counter() - t0
+
+    stats = AlgorithmStats(
+        algorithm_name="slimFFT_c",
+        query_count=0,
+        candidate_count=0,
+        heap_pushes=0,
+        heap_pops=0,
+        initialization_time_seconds=0.0,
+        query_data_structure_time_seconds=0.0,
+        candidate_processing_time_seconds=0.0,
+        selection_time_seconds=0.0,
+        solution_update_time_seconds=0.0,
+        total_time_seconds=float(total_time),
+    )
+
+    return GreedyProfileResult(
+        costs=list(costs),
+        deltas=[],
+        algorithm_name="slimFFT_c",
+        stats=stats,
+    )
 
 
 def profiles_match(reference: GreedyProfileResult, other: GreedyProfileResult, *, atol: float = 1e-3) -> bool:
@@ -28,18 +65,31 @@ def assert_profiles_match(reference: GreedyProfileResult, other: GreedyProfileRe
             raise AssertionError(f"Profiles disagree at k={k}: reference cost = {a}, other cost = {b}.")
 
 
-def compare_all_algorithms(R: Sequence[Point], B: Sequence[Point], names: List[str], atol: float = 1e-3) -> Dict[str, GreedyProfileResult]:
-    result = {}
+def compare_all_algorithms(
+    R: Sequence[Point],
+    B: Sequence[Point],
+    names: List[str],
+    atol: float = 1e-3,
+) -> Dict[str, GreedyProfileResult]:
+    result: Dict[str, GreedyProfileResult] = {}
+
     for name in names:
         if name == "naive":
-            result[name] = greedy_interval_baseline(R,B)
+            result[name] = greedy_interval_baseline(R, B)
         elif name == "noFFT":
-            result[name] = greedy_interval_priority_queue(R,B)
+            result[name] = greedy_interval_priority_queue(R, B)
         elif name == "FFT":
-            result[name] = greedy_interval_priority_queue_range_tree(R,B)
+            result[name] = greedy_interval_priority_queue_range_tree(R, B)
         elif name == "slimFFT":
-            result[name] = light_to_full_greedy_profile(greedy_interval_priority_queue_summary(R,B))
-        assert_profiles_match(result[names[0]],result[name])
+            result[name] = light_to_full_greedy_profile(
+                greedy_interval_priority_queue_summary(R, B)
+            )
+        elif name == "slimFFT_c":
+            result[name] = _cpp_profile_result(R, B)
+        else:
+            raise ValueError(f"Unknown algorithm name: {name}")
+
+        assert_profiles_match(result[names[0]], result[name], atol=atol)
 
     return result
 

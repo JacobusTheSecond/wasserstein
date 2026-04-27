@@ -21,7 +21,7 @@ from visualization import describe_solution_step, make_stepper, plot_solution_at
 # Change this import only if your slimFFT entry function has a different name.
 from algorithms import greedy_interval_priority_queue_summary as run_slim_fft
 
-MODE = "real_data"   # "real_data" or "benchmark"
+MODE = "benchmark"   # "real_data" or "benchmark"
 
 #real data configs
 DATA_DIR = Path(__file__).parent / "data"
@@ -51,11 +51,11 @@ LOW_COLOR = "R"
 LOW_BIAS_STRENGTH = 10.0
 HIGH_BIAS_STRENGTH = 10.0
 
-INITIAL_ALGORITHMS = ["naive", "noFFT", "FFT", "slimFFT"]
+INITIAL_ALGORITHMS = ["naive", "noFFT", "FFT", "slimFFT","slimFFT_c"]
 
 N_START = 10
 N_MULTIPLIER = 1.5
-TIME_LIMIT_SECONDS = 30.0
+TIME_LIMIT_SECONDS = 5.0
 
 REPEAT_UNTIL_N = 2000
 REPEAT_COUNT_SMALL = 7
