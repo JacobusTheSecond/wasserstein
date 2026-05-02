@@ -1,6 +1,7 @@
 # Wasserstein Profile
 
 Code for computing Wasserstein matching profiles for red and blue point sets on the line.
+This code accompanies the paper 'Computing All Optimal Partial $p$-Wasserstein Matchings on the Line', currently in preparation, by Sebastian Angrick, Jacobus Conradi, Monika Csikos, Niko Hastrich, Danny Mittal, André Nusser, and Krzystof Onak.
 
 The repository contains:
 - simple baseline implementations for correctness checks,
@@ -23,9 +24,7 @@ Install the Python dependencies:
 pip install numpy matplotlib numba kneed pybind11 scikit-build-core
 ```
 
-The C++ extension uses FFTW, so install that first.
-
-On Ubuntu / Debian:
+The C++ extension uses FFTW.
 
 ```bash
 sudo apt-get install libfftw3-dev
