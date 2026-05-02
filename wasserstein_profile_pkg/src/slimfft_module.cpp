@@ -139,7 +139,7 @@ static py::tuple profile_squared_with_lifetimes(
     return py::make_tuple(costs, intervals);
 }
 
-PYBIND11_MODULE(_slimfft, m) {
+PYBIND11_MODULE(_wasserstein_profile, m) {
     m.doc() = "C++ slimFFT profile extension";
 
     m.def("profile_squared",

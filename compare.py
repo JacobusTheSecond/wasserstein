@@ -13,22 +13,16 @@ from models import GreedyProfileResult, AlgorithmStats
 from mp_types import Point
 from utils import light_to_full_greedy_profile
 
-from slimfft_cpp import profile_squared, profile_squared_with_lifetimes
+from wasserstein_profile import profile_squared
 
 
 def _cpp_profile_result(R: Sequence[Point], B: Sequence[Point]) -> GreedyProfileResult:
-    """
-    Wrap the C++ profile-only solver in a GreedyProfileResult so it can
-    participate in profile comparisons.
-
-    We time the call here and attach a minimal AlgorithmStats object.
-    """
     t0 = perf_counter()
     costs = profile_squared(R, B)
     total_time = perf_counter() - t0
 
     stats = AlgorithmStats(
-        algorithm_name="slimFFT_c",
+        algorithm_name="slimFFT",
         query_count=0,
         candidate_count=0,
         heap_pushes=0,
@@ -44,7 +38,7 @@ def _cpp_profile_result(R: Sequence[Point], B: Sequence[Point]) -> GreedyProfile
     return GreedyProfileResult(
         costs=list(costs),
         deltas=[],
-        algorithm_name="slimFFT_c",
+        algorithm_name="slimFFT",
         stats=stats,
     )
 
@@ -74,17 +68,17 @@ def compare_all_algorithms(
     result: Dict[str, GreedyProfileResult] = {}
 
     for name in names:
-        if name == "naive":
+        if name == "very_naive":
             result[name] = greedy_interval_baseline(R, B)
-        elif name == "noFFT":
+        elif name == "naive":
             result[name] = greedy_interval_priority_queue(R, B)
-        elif name == "FFT":
+        elif name == "FFT_py":
             result[name] = greedy_interval_priority_queue_range_tree(R, B)
-        elif name == "slimFFT":
+        elif name == "slimFFT_py":
             result[name] = light_to_full_greedy_profile(
                 greedy_interval_priority_queue_summary(R, B)
             )
-        elif name == "slimFFT_c":
+        elif name == "FFT_c":
             result[name] = _cpp_profile_result(R, B)
         else:
             raise ValueError(f"Unknown algorithm name: {name}")

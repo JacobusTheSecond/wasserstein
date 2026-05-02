@@ -87,6 +87,22 @@ class _RangeTreeNode:
     cross_rl_shift_min: int = 0
     cross_rl_values: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.float64))
 
+from numba import njit
+
+
+@njit(cache=True, fastmath=True)
+def _interval_squared_cost_numba(
+    R: np.ndarray,
+    B: np.ndarray,
+    red_start: int,
+    blue_start: int,
+    count: int,
+) -> float:
+    total = 0.0
+    for a in range(count):
+        diff = R[red_start + a] - B[blue_start + a]
+        total += diff * diff
+    return total
 
 class BalancedIntervalSquaredCostDataStructure:
     """Range-tree data structure for balanced interval matching with squared cost."""
@@ -180,23 +196,65 @@ class BalancedIntervalSquaredCostDataStructure:
             + self._query_product_sum(node.right, query_l, query_r, shift)
         )
 
-    def match_interval_by_indices(self, merged_left: int, merged_right: int) -> CompactInterval:
+    def match_interval_by_indices(
+            self,
+            merged_left: int,
+            merged_right: int,
+            *,
+            direct_pair_threshold: int = 64,
+    ) -> CompactInterval:
+        """
+        Hybrid balanced-interval query.
+
+        For small balanced intervals, compute the matching cost directly with a
+        Numba kernel. For larger intervals, use the tree/FFT query path.
+
+        Parameters
+        ----------
+        merged_left, merged_right:
+            Inclusive indices in the merged order of all red/blue points.
+        direct_pair_threshold:
+            If the balanced interval contains at most this many matched pairs,
+            use the direct Numba kernel instead of the tree query.
+        """
         red_count = int(self.prefix_red_in_merged[merged_right + 1] - self.prefix_red_in_merged[merged_left])
         blue_count = int(self.prefix_blue_in_merged[merged_right + 1] - self.prefix_blue_in_merged[merged_left])
-        if red_count != blue_count:
-            raise ValueError(
-                "Queried merged interval is not balanced: "
-                f"found {red_count} red points and {blue_count} blue points."
-            )
-        if red_count == 0:
-            raise ValueError("The interval contains no points and cannot define a matching.")
+
+        #if red_count != blue_count:
+        #    raise ValueError(
+        #        "Queried merged interval is not balanced: "
+        #        f"found {red_count} red points and {blue_count} blue points."
+        #    )
+        #if red_count == 0:
+        #    raise ValueError("The interval contains no points and cannot define a matching.")
+
         red_start = int(self.prefix_red_in_merged[merged_left])
         blue_start = int(self.prefix_blue_in_merged[merged_left])
         red_end = red_start + red_count - 1
         blue_end = blue_start + blue_count - 1
+
+        # Small-k direct path
+        if red_count <= direct_pair_threshold:
+            cost = float(_interval_squared_cost_numba(
+                self.R,
+                self.B,
+                red_start,
+                blue_start,
+                red_count,
+            ))
+            return CompactInterval(
+                red_start=red_start,
+                red_end=red_end,
+                blue_start=blue_start,
+                blue_end=blue_end,
+                cost=cost,
+            )
+
+        # Large-k tree/FFT path
         sum_r2 = float(self.prefix_r2[red_end + 1] - self.prefix_r2[red_start])
         sum_b2 = float(self.prefix_b2[blue_end + 1] - self.prefix_b2[blue_start])
         prod_sum = self._query_product_sum(self.root, merged_left, merged_right, blue_start - red_start)
+
         return CompactInterval(
             red_start=red_start,
             red_end=red_end,

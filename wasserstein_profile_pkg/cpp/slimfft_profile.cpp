@@ -1,18 +1,13 @@
 #include <algorithm>
-#include <cassert>
 #include <cmath>
-#include <fftw3.h>
-#include <chrono>
 #include <cstdint>
-#include <functional>
+#include <fftw3.h>
 #include <iomanip>
 #include <iostream>
 #include <limits>
 #include <queue>
 #include <random>
 #include <stdexcept>
-#include <string>
-#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -34,36 +29,8 @@ struct ColoredPoint {
     int uid = -1;
 };
 
-struct LightCandidate {
-    int left_uid = -1;
-    int right_uid = -1;
-    double left_pos = 0.0;
-    double right_pos = 0.0;
-    char left_color = 'R';
-    char right_color = 'B';
-    CompactInterval merged_interval;
-    double delta_cost = 0.0;
-    double swallowed_cost = 0.0;
-    int swallowed_pairs = 0;
-};
-
-struct AlgorithmStats {
-    std::string algorithm_name;
-    std::int64_t query_count = 0;
-    std::int64_t candidate_count = 0;
-    std::int64_t heap_pushes = 0;
-    std::int64_t heap_pops = 0;
-    double initialization_time_seconds = 0.0;
-    double query_data_structure_time_seconds = 0.0;
-    double candidate_processing_time_seconds = 0.0;
-    double selection_time_seconds = 0.0;
-    double solution_update_time_seconds = 0.0;
-    double total_time_seconds = 0.0;
-};
-
 struct ProfileResult {
     std::vector<double> costs;
-    AlgorithmStats stats;
 };
 
 struct IntervalLifetime {
@@ -91,10 +58,6 @@ static void validate_instance(const std::vector<double>& R, const std::vector<do
         throw std::invalid_argument("B must be sorted.");
     }
 }
-
-// -----------------------------------------------------------------------------
-// FFT / convolution helpers (FFTW3)
-// -----------------------------------------------------------------------------
 
 static std::vector<double> direct_convolution(const std::vector<double>& a,
                                               const std::vector<double>& b) {
@@ -193,15 +156,18 @@ static std::vector<double> fftw_convolution(const std::vector<double>& a,
 
 static std::vector<double> real_convolution_hybrid(const std::vector<double>& a,
                                                    const std::vector<double>& b,
-                                                   int direct_threshold = 256) {
+                                                   int direct_threshold = 2 << 10) {
     const int out_len = static_cast<int>(a.size() + b.size() - 1);
     if (out_len <= 0) return {};
     if (out_len <= direct_threshold) return direct_convolution(a, b);
     return fftw_convolution(a, b);
 }
 
-static double interval_squared_cost_direct(const std::vector<double>& R, const std::vector<double>& B,
-                                           int red_start, int blue_start, int count) {
+static double interval_squared_cost_direct(const std::vector<double>& R,
+                                           const std::vector<double>& B,
+                                           int red_start,
+                                           int blue_start,
+                                           int count) {
     double total = 0.0;
     for (int a = 0; a < count; ++a) {
         const double diff = R[red_start + a] - B[blue_start + a];
@@ -221,6 +187,7 @@ static std::pair<int, std::vector<double>> combine_shift_arrays(
     bool any = false;
     int min_shift = 0;
     int max_shift = -1;
+
     for (const auto& part : parts) {
         if (part.second == nullptr || part.second->empty()) continue;
         const int lo = part.first;
@@ -234,7 +201,9 @@ static std::pair<int, std::vector<double>> combine_shift_arrays(
             max_shift = std::max(max_shift, hi);
         }
     }
+
     if (!any) return {0, {}};
+
     std::vector<double> out(max_shift - min_shift + 1, 0.0);
     for (const auto& part : parts) {
         if (part.second == nullptr || part.second->empty()) continue;
@@ -245,10 +214,6 @@ static std::pair<int, std::vector<double>> combine_shift_arrays(
     }
     return {min_shift, std::move(out)};
 }
-
-// -----------------------------------------------------------------------------
-// Balanced interval query data structure
-// -----------------------------------------------------------------------------
 
 class BalancedIntervalSquaredCostDataStructure {
 public:
@@ -265,10 +230,14 @@ public:
 
     const std::vector<ColoredPoint>& all_points() const { return all_points_; }
 
-    CompactInterval match_interval_by_indices(int merged_left, int merged_right,
-                                              int direct_pair_threshold = 64) const {
-        const int red_count = prefix_red_in_merged_[merged_right + 1] - prefix_red_in_merged_[merged_left];
-        const int blue_count = prefix_blue_in_merged_[merged_right + 1] - prefix_blue_in_merged_[merged_left];
+    CompactInterval match_interval_by_indices(int merged_left,
+                                              int merged_right,
+                                              int direct_pair_threshold = 2 << 10) const {
+        const int red_count =
+            prefix_red_in_merged_[merged_right + 1] - prefix_red_in_merged_[merged_left];
+        const int blue_count =
+            prefix_blue_in_merged_[merged_right + 1] - prefix_blue_in_merged_[merged_left];
+
         if (red_count != blue_count) {
             throw std::invalid_argument("Queried merged interval is not balanced.");
         }
@@ -282,14 +251,23 @@ public:
         const int blue_end = blue_start + blue_count - 1;
 
         if (red_count <= direct_pair_threshold) {
-            const double cost = interval_squared_cost_direct(R_, B_, red_start, blue_start, red_count);
+            const double cost =
+                interval_squared_cost_direct(R_, B_, red_start, blue_start, red_count);
             return CompactInterval{red_start, red_end, blue_start, blue_end, cost};
         }
 
         const double sum_r2 = prefix_r2_[red_end + 1] - prefix_r2_[red_start];
         const double sum_b2 = prefix_b2_[blue_end + 1] - prefix_b2_[blue_start];
-        const double prod_sum = query_product_sum(root_, merged_left, merged_right, blue_start - red_start);
-        return CompactInterval{red_start, red_end, blue_start, blue_end, sum_r2 + sum_b2 - 2.0 * prod_sum};
+        const double prod_sum =
+            query_product_sum(root_, merged_left, merged_right, blue_start - red_start);
+
+        return CompactInterval{
+            red_start,
+            red_end,
+            blue_start,
+            blue_end,
+            sum_r2 + sum_b2 - 2.0 * prod_sum
+        };
     }
 
 private:
@@ -299,14 +277,18 @@ private:
         int mid = 0;
         Node* left = nullptr;
         Node* right = nullptr;
+
         int red_start = -1;
         int red_end = -1;
         int blue_start = -1;
         int blue_end = -1;
+
         int total_shift_min = 0;
         std::vector<double> total_values;
+
         int cross_lr_shift_min = 0;
         std::vector<double> cross_lr_values;
+
         int cross_rl_shift_min = 0;
         std::vector<double> cross_rl_values;
     };
@@ -314,7 +296,6 @@ private:
     std::vector<double> R_;
     std::vector<double> B_;
     std::vector<ColoredPoint> all_points_;
-    std::vector<double> merged_positions_;
     std::vector<int> prefix_red_in_merged_;
     std::vector<int> prefix_blue_in_merged_;
     std::vector<double> prefix_r2_;
@@ -324,20 +305,21 @@ private:
     void build_merged_order() {
         std::vector<ColoredPoint> raw;
         raw.reserve(R_.size() + B_.size());
+
         int uid = 0;
         for (double x : R_) raw.push_back({x, 'R', uid++});
         for (double x : B_) raw.push_back({x, 'B', uid++});
+
         std::sort(raw.begin(), raw.end(), [](const ColoredPoint& a, const ColoredPoint& b) {
             if (a.position != b.position) return a.position < b.position;
             if (a.color != b.color) return a.color < b.color;
             return a.uid < b.uid;
         });
+
         all_points_.resize(raw.size());
-        merged_positions_.resize(raw.size());
         for (int i = 0; i < static_cast<int>(raw.size()); ++i) {
             raw[i].uid = i;
             all_points_[i] = raw[i];
-            merged_positions_[i] = raw[i].position;
         }
     }
 
@@ -345,14 +327,23 @@ private:
         const int m = static_cast<int>(all_points_.size());
         prefix_red_in_merged_.assign(m + 1, 0);
         prefix_blue_in_merged_.assign(m + 1, 0);
+
         for (int i = 0; i < m; ++i) {
-            prefix_red_in_merged_[i + 1] = prefix_red_in_merged_[i] + (all_points_[i].color == 'R');
-            prefix_blue_in_merged_[i + 1] = prefix_blue_in_merged_[i] + (all_points_[i].color == 'B');
+            prefix_red_in_merged_[i + 1] =
+                prefix_red_in_merged_[i] + (all_points_[i].color == 'R');
+            prefix_blue_in_merged_[i + 1] =
+                prefix_blue_in_merged_[i] + (all_points_[i].color == 'B');
         }
+
         prefix_r2_.assign(R_.size() + 1, 0.0);
         prefix_b2_.assign(B_.size() + 1, 0.0);
-        for (std::size_t i = 0; i < R_.size(); ++i) prefix_r2_[i + 1] = prefix_r2_[i] + R_[i] * R_[i];
-        for (std::size_t i = 0; i < B_.size(); ++i) prefix_b2_[i + 1] = prefix_b2_[i] + B_[i] * B_[i];
+
+        for (std::size_t i = 0; i < R_.size(); ++i) {
+            prefix_r2_[i + 1] = prefix_r2_[i] + R_[i] * R_[i];
+        }
+        for (std::size_t i = 0; i < B_.size(); ++i) {
+            prefix_b2_[i + 1] = prefix_b2_[i] + B_[i] * B_[i];
+        }
     }
 
     std::pair<int, int> range_color_indices(int l, int r, char color) const {
@@ -363,29 +354,37 @@ private:
         return {start, after_end - 1};
     }
 
-    std::pair<int, std::vector<double>> build_cross_left_red_right_blue(const Node* left, const Node* right) const {
+    std::pair<int, std::vector<double>>
+    build_cross_left_red_right_blue(const Node* left, const Node* right) const {
         if (left->red_start == -1 || right->blue_start == -1) return {0, {}};
+
         const int u = left->red_start;
         const int v = left->red_end;
         const int s = right->blue_start;
         const int t = right->blue_end;
+
         std::vector<double> red_vals;
         red_vals.reserve(v - u + 1);
         for (int i = v; i >= u; --i) red_vals.push_back(R_[i]);
+
         std::vector<double> blue_vals(B_.begin() + s, B_.begin() + t + 1);
         std::vector<double> values = real_convolution_hybrid(red_vals, blue_vals);
         return {s - v, std::move(values)};
     }
 
-    std::pair<int, std::vector<double>> build_cross_right_red_left_blue(const Node* left, const Node* right) const {
+    std::pair<int, std::vector<double>>
+    build_cross_right_red_left_blue(const Node* left, const Node* right) const {
         if (right->red_start == -1 || left->blue_start == -1) return {0, {}};
+
         const int u = right->red_start;
         const int v = right->red_end;
         const int s = left->blue_start;
         const int t = left->blue_end;
+
         std::vector<double> red_vals;
         red_vals.reserve(v - u + 1);
         for (int i = v; i >= u; --i) red_vals.push_back(R_[i]);
+
         std::vector<double> blue_vals(B_.begin() + s, B_.begin() + t + 1);
         std::vector<double> values = real_convolution_hybrid(red_vals, blue_vals);
         return {s - v, std::move(values)};
@@ -396,6 +395,7 @@ private:
         node->l = l;
         node->r = r;
         node->mid = (l + r) / 2;
+
         {
             auto [rs, re] = range_color_indices(l, r, 'R');
             node->red_start = rs;
@@ -406,9 +406,12 @@ private:
             node->blue_start = bs;
             node->blue_end = be;
         }
+
         if (l == r) return node;
+
         node->left = build_node(l, node->mid);
         node->right = build_node(node->mid + 1, r);
+
         {
             auto [shift_min, vals] = build_cross_left_red_right_blue(node->left, node->right);
             node->cross_lr_shift_min = shift_min;
@@ -425,10 +428,12 @@ private:
             parts.push_back({node->cross_lr_shift_min, &node->cross_lr_values});
             parts.push_back({node->cross_rl_shift_min, &node->cross_rl_values});
             parts.push_back({node->right->total_shift_min, &node->right->total_values});
+
             auto [shift_min, vals] = combine_shift_arrays(parts);
             node->total_shift_min = shift_min;
             node->total_values = std::move(vals);
         }
+
         return node;
     }
 
@@ -446,16 +451,13 @@ private:
         if (node->left == nullptr || node->right == nullptr) return 0.0;
         if (qr <= node->mid) return query_product_sum(node->left, ql, qr, shift);
         if (ql > node->mid) return query_product_sum(node->right, ql, qr, shift);
+
         return shift_array_value(node->cross_lr_shift_min, node->cross_lr_values, shift)
              + shift_array_value(node->cross_rl_shift_min, node->cross_rl_values, shift)
              + query_product_sum(node->left, ql, qr, shift)
              + query_product_sum(node->right, ql, qr, shift);
     }
 };
-
-// -----------------------------------------------------------------------------
-// Dynamic interval summary treap
-// -----------------------------------------------------------------------------
 
 class DynamicIntervalSetSummary {
 public:
@@ -465,7 +467,9 @@ public:
         std::vector<int> swallowed_ids;
     };
 
-    DynamicIntervalSetSummary() : root_(nullptr), total_cost_(0.0), total_size_(0), rng_(123456789) {}
+    DynamicIntervalSetSummary()
+        : root_(nullptr), total_cost_(0.0), total_size_(0), rng_(123456789) {}
+
     ~DynamicIntervalSetSummary() { destroy(root_); }
 
     double total_cost() const { return total_cost_; }
@@ -518,7 +522,8 @@ public:
         return {swallowed_cost, swallowed_pairs};
     }
 
-    ApplyWithIdsResult apply_interval_with_ids(const CompactInterval& merged_interval, int new_interval_id) {
+    ApplyWithIdsResult apply_interval_with_ids(const CompactInterval& merged_interval,
+                                               int new_interval_id) {
         auto [a, bc] = split(root_, merged_interval.red_start);
         auto [b, c] = split(bc, merged_interval.red_end + 1);
 
@@ -537,7 +542,8 @@ public:
         res.swallowed_pairs = subtree_pairs(b);
         collect_interval_ids(b, res.swallowed_ids);
 
-        Node* new_node = new Node(merged_interval, new_interval_id, static_cast<std::uint32_t>(rng_()));
+        Node* new_node = new Node(merged_interval, new_interval_id,
+                                  static_cast<std::uint32_t>(rng_()));
         destroy(b);
         root_ = merge(a, merge(new_node, c));
 
@@ -558,8 +564,13 @@ private:
         int subtree_max_red_end;
 
         Node(const CompactInterval& it, int id, std::uint32_t p)
-            : interval(it), interval_id(id), prio(p), left(nullptr), right(nullptr),
-              subtree_cost_sum(it.cost), subtree_pair_sum(it.size()),
+            : interval(it),
+              interval_id(id),
+              prio(p),
+              left(nullptr),
+              right(nullptr),
+              subtree_cost_sum(it.cost),
+              subtree_pair_sum(it.size()),
               subtree_max_red_end(it.red_end) {}
     };
 
@@ -570,13 +581,18 @@ private:
 
     static double subtree_cost(Node* node) { return node ? node->subtree_cost_sum : 0.0; }
     static int subtree_pairs(Node* node) { return node ? node->subtree_pair_sum : 0; }
-    static int max_red_end(Node* node) { return node ? node->subtree_max_red_end : std::numeric_limits<int>::min(); }
+    static int max_red_end(Node* node) {
+        return node ? node->subtree_max_red_end : std::numeric_limits<int>::min();
+    }
 
     static void pull(Node* node) {
         if (!node) return;
-        node->subtree_cost_sum = node->interval.cost + subtree_cost(node->left) + subtree_cost(node->right);
-        node->subtree_pair_sum = node->interval.size() + subtree_pairs(node->left) + subtree_pairs(node->right);
-        node->subtree_max_red_end = std::max({node->interval.red_end, max_red_end(node->left), max_red_end(node->right)});
+        node->subtree_cost_sum =
+            node->interval.cost + subtree_cost(node->left) + subtree_cost(node->right);
+        node->subtree_pair_sum =
+            node->interval.size() + subtree_pairs(node->left) + subtree_pairs(node->right);
+        node->subtree_max_red_end =
+            std::max({node->interval.red_end, max_red_end(node->left), max_red_end(node->right)});
     }
 
     static Node* merge(Node* a, Node* b) {
@@ -629,18 +645,26 @@ private:
     }
 };
 
-// -----------------------------------------------------------------------------
-// Candidate helpers / algorithm 4
-// -----------------------------------------------------------------------------
+struct LightCandidate {
+    int left_uid = -1;
+    int right_uid = -1;
+    CompactInterval merged_interval;
+    double delta_cost = 0.0;
+    double swallowed_cost = 0.0;
+    int swallowed_pairs = 0;
+};
 
-static bool candidate_valid(const LightCandidate& candidate, const std::vector<unsigned char>& alive,
-                            const std::vector<int>& prev_idx, const std::vector<int>& next_idx) {
+static bool candidate_valid(const LightCandidate& candidate,
+                            const std::vector<unsigned char>& alive,
+                            const std::vector<int>& prev_idx,
+                            const std::vector<int>& next_idx) {
     const int left_id = candidate.left_uid;
     const int right_id = candidate.right_uid;
     return 0 <= left_id && left_id < static_cast<int>(alive.size()) &&
            0 <= right_id && right_id < static_cast<int>(alive.size()) &&
            alive[left_id] && alive[right_id] &&
-           next_idx[left_id] == right_id && prev_idx[right_id] == left_id;
+           next_idx[left_id] == right_id &&
+           prev_idx[right_id] == left_id;
 }
 
 static LightCandidate evaluate_candidate(const BalancedIntervalSquaredCostDataStructure& query_ds,
@@ -653,18 +677,20 @@ static LightCandidate evaluate_candidate(const BalancedIntervalSquaredCostDataSt
     if (left_endpoint.color == right_endpoint.color) {
         throw std::invalid_argument("Candidate endpoints must have opposite colors.");
     }
-    CompactInterval merged = query_ds.match_interval_by_indices(left_endpoint.uid, right_endpoint.uid);
-    auto [swallowed_cost, swallowed_pairs] = interval_set.range_summary(merged.red_start, merged.red_end);
+
+    CompactInterval merged =
+        query_ds.match_interval_by_indices(left_endpoint.uid, right_endpoint.uid);
+
+    auto [swallowed_cost, swallowed_pairs] =
+        interval_set.range_summary(merged.red_start, merged.red_end);
+
     if (merged.size() != swallowed_pairs + 1) {
         throw std::runtime_error("Unexpected candidate size.");
     }
+
     LightCandidate cand;
     cand.left_uid = left_endpoint.uid;
     cand.right_uid = right_endpoint.uid;
-    cand.left_pos = left_endpoint.position;
-    cand.right_pos = right_endpoint.position;
-    cand.left_color = left_endpoint.color;
-    cand.right_color = right_endpoint.color;
     cand.merged_interval = merged;
     cand.swallowed_cost = swallowed_cost;
     cand.swallowed_pairs = swallowed_pairs;
@@ -672,12 +698,16 @@ static LightCandidate evaluate_candidate(const BalancedIntervalSquaredCostDataSt
     return cand;
 }
 
-static LightCandidate refresh_candidate(const LightCandidate& candidate, DynamicIntervalSetSummary& interval_set) {
-    auto [swallowed_cost, swallowed_pairs] = interval_set.range_summary(
-        candidate.merged_interval.red_start, candidate.merged_interval.red_end);
+static LightCandidate refresh_candidate(const LightCandidate& candidate,
+                                        DynamicIntervalSetSummary& interval_set) {
+    auto [swallowed_cost, swallowed_pairs] =
+        interval_set.range_summary(candidate.merged_interval.red_start,
+                                   candidate.merged_interval.red_end);
+
     if (candidate.merged_interval.size() != swallowed_pairs + 1) {
         throw std::runtime_error("Unexpected refreshed candidate size.");
     }
+
     LightCandidate out = candidate;
     out.swallowed_cost = swallowed_cost;
     out.swallowed_pairs = swallowed_pairs;
@@ -685,7 +715,9 @@ static LightCandidate refresh_candidate(const LightCandidate& candidate, Dynamic
     return out;
 }
 
-static bool same_priority(const LightCandidate& a, const LightCandidate& b, double atol = 1e-12) {
+static bool same_priority(const LightCandidate& a,
+                          const LightCandidate& b,
+                          double atol = 1e-12) {
     return std::abs(a.delta_cost - b.delta_cost) <= atol &&
            a.left_uid == b.left_uid &&
            a.right_uid == b.right_uid &&
@@ -695,44 +727,41 @@ static bool same_priority(const LightCandidate& a, const LightCandidate& b, doub
 struct CandidateCompare {
     bool operator()(const LightCandidate& a, const LightCandidate& b) const {
         if (a.delta_cost != b.delta_cost) return a.delta_cost > b.delta_cost;
-        if (a.left_pos != b.left_pos) return a.left_pos > b.left_pos;
-        if (a.right_pos != b.right_pos) return a.right_pos > b.right_pos;
-        if (a.left_color != b.left_color) return a.left_color > b.left_color;
-        if (a.right_color != b.right_color) return a.right_color > b.right_color;
         if (a.left_uid != b.left_uid) return a.left_uid > b.left_uid;
         return a.right_uid > b.right_uid;
     }
 };
 
-static bool push_candidate(std::priority_queue<LightCandidate, std::vector<LightCandidate>, CandidateCompare>& heap,
+static bool push_candidate(std::priority_queue<LightCandidate,
+                                               std::vector<LightCandidate>,
+                                               CandidateCompare>& heap,
                            const std::vector<ColoredPoint>& all_points,
                            DynamicIntervalSetSummary& interval_set,
-                           int left_id, int right_id,
+                           int left_id,
+                           int right_id,
                            const BalancedIntervalSquaredCostDataStructure& query_ds) {
     if (left_id < 0 || right_id < 0) return false;
-    if (left_id >= static_cast<int>(all_points.size()) || right_id >= static_cast<int>(all_points.size())) return false;
+    if (left_id >= static_cast<int>(all_points.size()) ||
+        right_id >= static_cast<int>(all_points.size())) {
+        return false;
+    }
+
     const ColoredPoint& left_point = all_points[left_id];
     const ColoredPoint& right_point = all_points[right_id];
     if (left_point.color == right_point.color) return false;
+
     heap.push(evaluate_candidate(query_ds, interval_set, left_point, right_point));
     return true;
 }
 
-ProfileResult compute_profile_squared(const std::vector<double>& R, const std::vector<double>& B) {
+ProfileResult compute_profile_squared(const std::vector<double>& R,
+                                      const std::vector<double>& B) {
     validate_instance(R, B);
 
-    ProfileResult result;
-    result.stats.algorithm_name = "slimFFT_cpp_profile_only";
-
-    auto t_total_start = std::chrono::high_resolution_clock::now();
-    auto t0 = std::chrono::high_resolution_clock::now();
     BalancedIntervalSquaredCostDataStructure query_ds(R, B);
-    auto t1 = std::chrono::high_resolution_clock::now();
-    result.stats.initialization_time_seconds = std::chrono::duration<double>(t1 - t0).count();
-    result.stats.query_data_structure_time_seconds = result.stats.initialization_time_seconds;
-
     const auto& all_points = query_ds.all_points();
     const int m_points = static_cast<int>(all_points.size());
+
     std::vector<int> prev_idx(m_points), next_idx(m_points);
     std::vector<unsigned char> alive(m_points, 1);
     for (int i = 0; i < m_points; ++i) {
@@ -741,33 +770,29 @@ ProfileResult compute_profile_squared(const std::vector<double>& R, const std::v
     }
 
     DynamicIntervalSetSummary interval_set;
-    result.costs.clear();
-    result.costs.push_back(0.0);
-
-    std::priority_queue<LightCandidate, std::vector<LightCandidate>, CandidateCompare> heap;
+    std::priority_queue<LightCandidate,
+                        std::vector<LightCandidate>,
+                        CandidateCompare> heap;
 
     for (int left_id = 0; left_id + 1 < m_points; ++left_id) {
-        auto c0 = std::chrono::high_resolution_clock::now();
-        bool pushed = push_candidate(heap, all_points, interval_set, left_id, left_id + 1, query_ds);
-        auto c1 = std::chrono::high_resolution_clock::now();
-        result.stats.candidate_processing_time_seconds += std::chrono::duration<double>(c1 - c0).count();
-        if (pushed) {
-            ++result.stats.query_count;
-            ++result.stats.candidate_count;
-            ++result.stats.heap_pushes;
-        }
+        push_candidate(heap, all_points, interval_set, left_id, left_id + 1, query_ds);
     }
+
+    ProfileResult result;
+    result.costs.reserve(R.size() + 1);
+    result.costs.push_back(0.0);
 
     const int n = static_cast<int>(R.size());
     for (int k = 1; k <= n; ++k) {
-        auto s0 = std::chrono::high_resolution_clock::now();
         LightCandidate chosen;
         bool found = false;
+
         while (!heap.empty()) {
             LightCandidate candidate = heap.top();
             heap.pop();
-            ++result.stats.heap_pops;
+
             if (!candidate_valid(candidate, alive, prev_idx, next_idx)) continue;
+
             LightCandidate refreshed = refresh_candidate(candidate, interval_set);
             if (same_priority(candidate, refreshed)) {
                 chosen = refreshed;
@@ -775,62 +800,57 @@ ProfileResult compute_profile_squared(const std::vector<double>& R, const std::v
                 break;
             }
             heap.push(refreshed);
-            ++result.stats.heap_pushes;
         }
-        auto s1 = std::chrono::high_resolution_clock::now();
-        result.stats.selection_time_seconds += std::chrono::duration<double>(s1 - s0).count();
-        if (!found) throw std::runtime_error("Priority queue became empty before matching completed.");
 
-        auto u0 = std::chrono::high_resolution_clock::now();
-        auto [swallowed_cost, swallowed_pairs] = interval_set.apply_interval(chosen.merged_interval);
-        if (std::abs(swallowed_cost - chosen.swallowed_cost) > 1e-9 || swallowed_pairs != chosen.swallowed_pairs) {
-            throw std::runtime_error("Chosen candidate summary changed between refresh and application.");
+        if (!found) {
+            throw std::runtime_error("Priority queue became empty before matching completed.");
+        }
+
+        auto [swallowed_cost, swallowed_pairs] =
+            interval_set.apply_interval(chosen.merged_interval);
+
+        if (std::abs(swallowed_cost - chosen.swallowed_cost) > 1e-9 ||
+            swallowed_pairs != chosen.swallowed_pairs) {
+            throw std::runtime_error(
+                "Chosen candidate summary changed between refresh and application."
+            );
         }
 
         const int left_id = chosen.left_uid;
         const int right_id = chosen.right_uid;
         const int left_neighbor = prev_idx[left_id];
         const int right_neighbor = next_idx[right_id];
+
         alive[left_id] = 0;
         alive[right_id] = 0;
+
         if (left_neighbor != -1) next_idx[left_neighbor] = right_neighbor;
         if (right_neighbor != -1) prev_idx[right_neighbor] = left_neighbor;
+
         prev_idx[left_id] = next_idx[left_id] = -1;
         prev_idx[right_id] = next_idx[right_id] = -1;
-        auto u1 = std::chrono::high_resolution_clock::now();
-        result.stats.solution_update_time_seconds += std::chrono::duration<double>(u1 - u0).count();
 
-        auto c0 = std::chrono::high_resolution_clock::now();
-        bool pushed = push_candidate(heap, all_points, interval_set, left_neighbor, right_neighbor, query_ds);
-        auto c1 = std::chrono::high_resolution_clock::now();
-        result.stats.candidate_processing_time_seconds += std::chrono::duration<double>(c1 - c0).count();
-        if (pushed) {
-            ++result.stats.query_count;
-            ++result.stats.candidate_count;
-            ++result.stats.heap_pushes;
-        }
+        push_candidate(heap, all_points, interval_set, left_neighbor, right_neighbor, query_ds);
 
         if (interval_set.total_size() != k) {
             throw std::runtime_error("Internal error: total_size mismatch.");
         }
+
         result.costs.push_back(interval_set.total_cost());
     }
 
-    auto t_total_end = std::chrono::high_resolution_clock::now();
-    result.stats.total_time_seconds = std::chrono::duration<double>(t_total_end - t_total_start).count();
     return result;
 }
 
-
-ProfileWithLifetimesResult compute_profile_squared_with_lifetimes(const std::vector<double>& R,
-                                                                 const std::vector<double>& B) {
+ProfileWithLifetimesResult compute_profile_squared_with_lifetimes(
+    const std::vector<double>& R,
+    const std::vector<double>& B) {
     validate_instance(R, B);
 
-    ProfileWithLifetimesResult result;
     BalancedIntervalSquaredCostDataStructure query_ds(R, B);
-
     const auto& all_points = query_ds.all_points();
     const int m_points = static_cast<int>(all_points.size());
+
     std::vector<int> prev_idx(m_points), next_idx(m_points);
     std::vector<unsigned char> alive(m_points, 1);
     for (int i = 0; i < m_points; ++i) {
@@ -839,23 +859,30 @@ ProfileWithLifetimesResult compute_profile_squared_with_lifetimes(const std::vec
     }
 
     DynamicIntervalSetSummary interval_set;
-    result.costs.clear();
-    result.costs.push_back(0.0);
-    result.intervals.reserve(R.size());
+    std::priority_queue<LightCandidate,
+                        std::vector<LightCandidate>,
+                        CandidateCompare> heap;
 
-    std::priority_queue<LightCandidate, std::vector<LightCandidate>, CandidateCompare> heap;
     for (int left_id = 0; left_id + 1 < m_points; ++left_id) {
         push_candidate(heap, all_points, interval_set, left_id, left_id + 1, query_ds);
     }
+
+    ProfileWithLifetimesResult result;
+    result.costs.reserve(R.size() + 1);
+    result.costs.push_back(0.0);
+    result.intervals.reserve(R.size());
 
     const int n = static_cast<int>(R.size());
     for (int k = 1; k <= n; ++k) {
         LightCandidate chosen;
         bool found = false;
+
         while (!heap.empty()) {
             LightCandidate candidate = heap.top();
             heap.pop();
+
             if (!candidate_valid(candidate, alive, prev_idx, next_idx)) continue;
+
             LightCandidate refreshed = refresh_candidate(candidate, interval_set);
             if (same_priority(candidate, refreshed)) {
                 chosen = refreshed;
@@ -864,13 +891,20 @@ ProfileWithLifetimesResult compute_profile_squared_with_lifetimes(const std::vec
             }
             heap.push(refreshed);
         }
-        if (!found) throw std::runtime_error("Priority queue became empty before matching completed.");
+
+        if (!found) {
+            throw std::runtime_error("Priority queue became empty before matching completed.");
+        }
 
         const int new_interval_id = static_cast<int>(result.intervals.size());
-        auto apply_res = interval_set.apply_interval_with_ids(chosen.merged_interval, new_interval_id);
+        auto apply_res =
+            interval_set.apply_interval_with_ids(chosen.merged_interval, new_interval_id);
+
         if (std::abs(apply_res.swallowed_cost - chosen.swallowed_cost) > 1e-9 ||
             apply_res.swallowed_pairs != chosen.swallowed_pairs) {
-            throw std::runtime_error("Chosen candidate summary changed between refresh and application.");
+            throw std::runtime_error(
+                "Chosen candidate summary changed between refresh and application."
+            );
         }
 
         for (int old_id : apply_res.swallowed_ids) {
@@ -895,8 +929,10 @@ ProfileWithLifetimesResult compute_profile_squared_with_lifetimes(const std::vec
 
         alive[left_id] = 0;
         alive[right_id] = 0;
+
         if (left_neighbor != -1) next_idx[left_neighbor] = right_neighbor;
         if (right_neighbor != -1) prev_idx[right_neighbor] = left_neighbor;
+
         prev_idx[left_id] = next_idx[left_id] = -1;
         prev_idx[right_id] = next_idx[right_id] = -1;
 
@@ -905,23 +941,14 @@ ProfileWithLifetimesResult compute_profile_squared_with_lifetimes(const std::vec
         if (interval_set.total_size() != k) {
             throw std::runtime_error("Internal error: total_size mismatch.");
         }
+
         result.costs.push_back(interval_set.total_cost());
     }
 
     return result;
 }
 
-
 } // namespace slimfft
-
-// -----------------------------------------------------------------------------
-// Simple CLI:
-//   stdin format:
-//     n
-//     r1 r2 ... rn
-//     b1 b2 ... bn
-// Outputs profile costs[0..n]
-// -----------------------------------------------------------------------------
 
 #ifndef SLIMFFT_BUILD_PYTHON
 int main() {
@@ -933,6 +960,7 @@ int main() {
         std::cerr << "Expected n on stdin.\n";
         return 1;
     }
+
     std::vector<double> R(n), B(n);
     for (int i = 0; i < n; ++i) {
         if (!(std::cin >> R[i])) {
@@ -954,7 +982,7 @@ int main() {
             if (i) std::cout << ' ';
             std::cout << result.costs[i];
         }
-        std::cout << "\n";
+        std::cout << '\n';
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";
         return 2;

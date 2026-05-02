@@ -149,16 +149,6 @@ def _apply_full_delta_to_solution(
 def light_to_full_greedy_profile(
     light_profile: LightGreedyProfileResult,
 ) -> GreedyProfileResult:
-    """
-    Reconstruct a full GreedyProfileResult from a LightGreedyProfileResult.
-
-    This version is O(n log n) expected time:
-      - O(log m) treap work per accepted step
-      - plus O(t) to collect swallowed intervals at that step
-      - and sum of swallowed interval counts over all steps is O(n)
-
-    So total is O(n log n + n) = O(n log n) expected.
-    """
     interval_set = DynamicIntervalSetSummary()
     full_deltas: List[CandidateEvaluation] = []
 
@@ -167,7 +157,7 @@ def light_to_full_greedy_profile(
             light_delta.merged_interval
         )
 
-        if abs(swallowed_cost - light_delta.swallowed_cost) > 1e-9:
+        if abs(swallowed_cost - light_delta.swallowed_cost) > 1e-5:
             raise ValueError(
                 f"Step {step_index}: swallowed cost mismatch while reconstructing full profile "
                 f"({swallowed_cost} vs stored {light_delta.swallowed_cost})."

@@ -8,13 +8,12 @@ find_package(pybind11 CONFIG REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(FFTW3 REQUIRED IMPORTED_TARGET fftw3)
 
-pybind11_add_module(_slimfft
+pybind11_add_module(_wasserstein_profile
     src/slimfft_module.cpp
     cpp/slimfft_profile.cpp
 )
 
-target_compile_definitions(_slimfft PRIVATE SLIMFFT_BUILD_PYTHON)
-target_link_libraries(_slimfft PRIVATE PkgConfig::FFTW3)
+target_compile_definitions(_wasserstein_profile PRIVATE SLIMFFT_BUILD_PYTHON)
+target_link_libraries(_wasserstein_profile PRIVATE PkgConfig::FFTW3)
 
-# THIS IS THE IMPORTANT PART:
-install(TARGETS _slimfft DESTINATION slimfft_cpp)
+install(TARGETS _wasserstein_profile DESTINATION wasserstein_profile)
