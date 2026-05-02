@@ -59,6 +59,39 @@ static void validate_instance(const std::vector<double>& R, const std::vector<do
     }
 }
 
+static void validate_p(int p) {
+    if (p < 1) {
+        throw std::invalid_argument("p must be a positive integer.");
+    }
+}
+
+static double ipow(double x, int p) {
+    double result = 1.0;
+    while (p > 0) {
+        if (p & 1) result *= x;
+        x *= x;
+        p >>= 1;
+    }
+    return result;
+}
+
+static double abs_ipow(double x, int p) {
+    return ipow(std::abs(x), p);
+}
+
+static std::vector<double> make_binom_row(int p) {
+    std::vector<double> binom(p + 1, 0.0);
+    binom[0] = 1.0;
+    for (int i = 1; i <= p; ++i) {
+        binom[i] = binom[i - 1] * static_cast<double>(p - i + 1) / static_cast<double>(i);
+    }
+    return binom;
+}
+
+// -----------------------------------------------------------------------------
+// FFT / convolution helpers
+// -----------------------------------------------------------------------------
+
 static std::vector<double> direct_convolution(const std::vector<double>& a,
                                               const std::vector<double>& b) {
     if (a.empty() || b.empty()) return {};
@@ -163,15 +196,16 @@ static std::vector<double> real_convolution_hybrid(const std::vector<double>& a,
     return fftw_convolution(a, b);
 }
 
-static double interval_squared_cost_direct(const std::vector<double>& R,
-                                           const std::vector<double>& B,
-                                           int red_start,
-                                           int blue_start,
-                                           int count) {
+static double interval_cost_direct(const std::vector<double>& R,
+                                   const std::vector<double>& B,
+                                   int red_start,
+                                   int blue_start,
+                                   int count,
+                                   int p) {
     double total = 0.0;
     for (int a = 0; a < count; ++a) {
         const double diff = R[red_start + a] - B[blue_start + a];
-        total += diff * diff;
+        total += abs_ipow(diff, p);
     }
     return total;
 }
@@ -215,18 +249,109 @@ static std::pair<int, std::vector<double>> combine_shift_arrays(
     return {min_shift, std::move(out)};
 }
 
-class BalancedIntervalSquaredCostDataStructure {
+static std::vector<double> pointwise_power(const std::vector<double>& vals, int p) {
+    std::vector<double> out(vals.size(), 1.0);
+    if (p == 0) return out;
+    for (std::size_t i = 0; i < vals.size(); ++i) out[i] = ipow(vals[i], p);
+    return out;
+}
+
+static std::vector<double> prefix_sums(const std::vector<double>& vals) {
+    std::vector<double> pref(vals.size() + 1, 0.0);
+    for (std::size_t i = 0; i < vals.size(); ++i) {
+        pref[i + 1] = pref[i] + vals[i];
+    }
+    return pref;
+}
+
+static double prefix_range_sum(const std::vector<double>& pref, int l, int r) {
+    if (l > r) return 0.0;
+    return pref[r + 1] - pref[l];
+}
+
+static std::pair<int, std::vector<double>> build_cross_values_general(
+    const std::vector<double>& red_forward,
+    const std::vector<double>& blue_forward,
+    int shift_min,
+    int p,
+    bool red_left_blue_right,
+    const std::vector<double>& binom) {
+
+    if (red_forward.empty() || blue_forward.empty()) return {0, {}};
+
+    const int nr = static_cast<int>(red_forward.size());
+    const int nb = static_cast<int>(blue_forward.size());
+    const int len = nr + nb - 1;
+
+    std::vector<double> red_rev(red_forward.rbegin(), red_forward.rend());
+    std::vector<double> values(len, 0.0);
+
+    // Mixed terms only: c = 1, ..., p-1.
+    for (int c = 1; c < p; ++c) {
+        const int red_exp = c;
+        const int blue_exp = p - c;
+
+        std::vector<double> a = pointwise_power(red_rev, red_exp);
+        std::vector<double> b = pointwise_power(blue_forward, blue_exp);
+        std::vector<double> conv = real_convolution_hybrid(a, b);
+
+        const int sign_parity = red_left_blue_right ? c : (p - c);
+        const double sign = (sign_parity & 1) ? -1.0 : 1.0;
+        const double coeff = sign * binom[c];
+
+        for (std::size_t i = 0; i < conv.size(); ++i) {
+            values[i] += coeff * conv[i];
+        }
+    }
+
+    // Pure endpoint terms handled by prefix sums.
+    // If red is on the left and blue on the right, all terms are (b-r)^p.
+    // If red is on the right and blue on the left, all terms are (r-b)^p.
+    const double coeff_blue = red_left_blue_right ? 1.0 : ((p & 1) ? -1.0 : 1.0);
+    const double coeff_red  = red_left_blue_right ? ((p & 1) ? -1.0 : 1.0) : 1.0;
+
+    std::vector<double> red_rev_p = pointwise_power(red_rev, p);
+    std::vector<double> blue_p = pointwise_power(blue_forward, p);
+
+    std::vector<double> red_pref = prefix_sums(red_rev_p);
+    std::vector<double> blue_pref = prefix_sums(blue_p);
+
+    for (int q = 0; q < len; ++q) {
+        const int a_lo = std::max(0, q - (nb - 1));
+        const int a_hi = std::min(q, nr - 1);
+
+        const int b_lo = std::max(0, q - (nr - 1));
+        const int b_hi = std::min(q, nb - 1);
+
+        values[q] += coeff_red * prefix_range_sum(red_pref, a_lo, a_hi);
+        values[q] += coeff_blue * prefix_range_sum(blue_pref, b_lo, b_hi);
+    }
+
+    for (double& v : values) {
+        if (std::abs(v) < 1e-10) v = 0.0;
+    }
+
+    return {shift_min, std::move(values)};
+}
+
+// -----------------------------------------------------------------------------
+// Balanced interval query data structure for general integer p
+// -----------------------------------------------------------------------------
+
+class BalancedIntervalCostDataStructure {
 public:
-    explicit BalancedIntervalSquaredCostDataStructure(std::vector<double> red,
-                                                      std::vector<double> blue)
-        : R_(std::move(red)), B_(std::move(blue)) {
+    explicit BalancedIntervalCostDataStructure(std::vector<double> red,
+                                               std::vector<double> blue,
+                                               int p)
+        : R_(std::move(red)), B_(std::move(blue)), p_(p), binom_(make_binom_row(p)) {
         validate_instance(R_, B_);
+        validate_p(p_);
         build_merged_order();
-        build_prefixes();
+        build_prefix_counts();
         root_ = build_node(0, static_cast<int>(all_points_.size()) - 1);
     }
 
-    ~BalancedIntervalSquaredCostDataStructure() { destroy(root_); }
+    ~BalancedIntervalCostDataStructure() { destroy(root_); }
 
     const std::vector<ColoredPoint>& all_points() const { return all_points_; }
 
@@ -250,24 +375,16 @@ public:
         const int red_end = red_start + red_count - 1;
         const int blue_end = blue_start + blue_count - 1;
 
+        double cost;
         if (red_count <= direct_pair_threshold) {
-            const double cost =
-                interval_squared_cost_direct(R_, B_, red_start, blue_start, red_count);
-            return CompactInterval{red_start, red_end, blue_start, blue_end, cost};
+            cost = interval_cost_direct(R_, B_, red_start, blue_start, red_count, p_);
+        } else {
+            const int shift = blue_start - red_start;
+            cost = query_cost(root_, merged_left, merged_right, shift);
+            if (std::abs(cost) < 1e-10) cost = 0.0;
         }
 
-        const double sum_r2 = prefix_r2_[red_end + 1] - prefix_r2_[red_start];
-        const double sum_b2 = prefix_b2_[blue_end + 1] - prefix_b2_[blue_start];
-        const double prod_sum =
-            query_product_sum(root_, merged_left, merged_right, blue_start - red_start);
-
-        return CompactInterval{
-            red_start,
-            red_end,
-            blue_start,
-            blue_end,
-            sum_r2 + sum_b2 - 2.0 * prod_sum
-        };
+        return CompactInterval{red_start, red_end, blue_start, blue_end, cost};
     }
 
 private:
@@ -295,11 +412,12 @@ private:
 
     std::vector<double> R_;
     std::vector<double> B_;
+    int p_;
+    std::vector<double> binom_;
+
     std::vector<ColoredPoint> all_points_;
     std::vector<int> prefix_red_in_merged_;
     std::vector<int> prefix_blue_in_merged_;
-    std::vector<double> prefix_r2_;
-    std::vector<double> prefix_b2_;
     Node* root_ = nullptr;
 
     void build_merged_order() {
@@ -323,7 +441,7 @@ private:
         }
     }
 
-    void build_prefixes() {
+    void build_prefix_counts() {
         const int m = static_cast<int>(all_points_.size());
         prefix_red_in_merged_.assign(m + 1, 0);
         prefix_blue_in_merged_.assign(m + 1, 0);
@@ -333,16 +451,6 @@ private:
                 prefix_red_in_merged_[i] + (all_points_[i].color == 'R');
             prefix_blue_in_merged_[i + 1] =
                 prefix_blue_in_merged_[i] + (all_points_[i].color == 'B');
-        }
-
-        prefix_r2_.assign(R_.size() + 1, 0.0);
-        prefix_b2_.assign(B_.size() + 1, 0.0);
-
-        for (std::size_t i = 0; i < R_.size(); ++i) {
-            prefix_r2_[i + 1] = prefix_r2_[i] + R_[i] * R_[i];
-        }
-        for (std::size_t i = 0; i < B_.size(); ++i) {
-            prefix_b2_[i + 1] = prefix_b2_[i] + B_[i] * B_[i];
         }
     }
 
@@ -363,13 +471,9 @@ private:
         const int s = right->blue_start;
         const int t = right->blue_end;
 
-        std::vector<double> red_vals;
-        red_vals.reserve(v - u + 1);
-        for (int i = v; i >= u; --i) red_vals.push_back(R_[i]);
-
+        std::vector<double> red_vals(R_.begin() + u, R_.begin() + v + 1);
         std::vector<double> blue_vals(B_.begin() + s, B_.begin() + t + 1);
-        std::vector<double> values = real_convolution_hybrid(red_vals, blue_vals);
-        return {s - v, std::move(values)};
+        return build_cross_values_general(red_vals, blue_vals, s - v, p_, true, binom_);
     }
 
     std::pair<int, std::vector<double>>
@@ -381,13 +485,9 @@ private:
         const int s = left->blue_start;
         const int t = left->blue_end;
 
-        std::vector<double> red_vals;
-        red_vals.reserve(v - u + 1);
-        for (int i = v; i >= u; --i) red_vals.push_back(R_[i]);
-
+        std::vector<double> red_vals(R_.begin() + u, R_.begin() + v + 1);
         std::vector<double> blue_vals(B_.begin() + s, B_.begin() + t + 1);
-        std::vector<double> values = real_convolution_hybrid(red_vals, blue_vals);
-        return {s - v, std::move(values)};
+        return build_cross_values_general(red_vals, blue_vals, s - v, p_, false, binom_);
     }
 
     Node* build_node(int l, int r) {
@@ -444,20 +544,24 @@ private:
         delete node;
     }
 
-    double query_product_sum(const Node* node, int ql, int qr, int shift) const {
+    double query_cost(const Node* node, int ql, int qr, int shift) const {
         if (ql <= node->l && node->r <= qr) {
             return shift_array_value(node->total_shift_min, node->total_values, shift);
         }
         if (node->left == nullptr || node->right == nullptr) return 0.0;
-        if (qr <= node->mid) return query_product_sum(node->left, ql, qr, shift);
-        if (ql > node->mid) return query_product_sum(node->right, ql, qr, shift);
+        if (qr <= node->mid) return query_cost(node->left, ql, qr, shift);
+        if (ql > node->mid) return query_cost(node->right, ql, qr, shift);
 
         return shift_array_value(node->cross_lr_shift_min, node->cross_lr_values, shift)
              + shift_array_value(node->cross_rl_shift_min, node->cross_rl_values, shift)
-             + query_product_sum(node->left, ql, qr, shift)
-             + query_product_sum(node->right, ql, qr, shift);
+             + query_cost(node->left, ql, qr, shift)
+             + query_cost(node->right, ql, qr, shift);
     }
 };
+
+// -----------------------------------------------------------------------------
+// Dynamic interval summary treap
+// -----------------------------------------------------------------------------
 
 class DynamicIntervalSetSummary {
 public:
@@ -645,6 +749,10 @@ private:
     }
 };
 
+// -----------------------------------------------------------------------------
+// Candidate helpers / solver
+// -----------------------------------------------------------------------------
+
 struct LightCandidate {
     int left_uid = -1;
     int right_uid = -1;
@@ -667,7 +775,7 @@ static bool candidate_valid(const LightCandidate& candidate,
            prev_idx[right_id] == left_id;
 }
 
-static LightCandidate evaluate_candidate(const BalancedIntervalSquaredCostDataStructure& query_ds,
+static LightCandidate evaluate_candidate(const BalancedIntervalCostDataStructure& query_ds,
                                          DynamicIntervalSetSummary& interval_set,
                                          const ColoredPoint& left_endpoint,
                                          const ColoredPoint& right_endpoint) {
@@ -739,7 +847,7 @@ static bool push_candidate(std::priority_queue<LightCandidate,
                            DynamicIntervalSetSummary& interval_set,
                            int left_id,
                            int right_id,
-                           const BalancedIntervalSquaredCostDataStructure& query_ds) {
+                           const BalancedIntervalCostDataStructure& query_ds) {
     if (left_id < 0 || right_id < 0) return false;
     if (left_id >= static_cast<int>(all_points.size()) ||
         right_id >= static_cast<int>(all_points.size())) {
@@ -754,11 +862,13 @@ static bool push_candidate(std::priority_queue<LightCandidate,
     return true;
 }
 
-ProfileResult compute_profile_squared(const std::vector<double>& R,
-                                      const std::vector<double>& B) {
+ProfileResult compute_profile_p(const std::vector<double>& R,
+                                const std::vector<double>& B,
+                                int p) {
     validate_instance(R, B);
+    validate_p(p);
 
-    BalancedIntervalSquaredCostDataStructure query_ds(R, B);
+    BalancedIntervalCostDataStructure query_ds(R, B, p);
     const auto& all_points = query_ds.all_points();
     const int m_points = static_cast<int>(all_points.size());
 
@@ -842,12 +952,14 @@ ProfileResult compute_profile_squared(const std::vector<double>& R,
     return result;
 }
 
-ProfileWithLifetimesResult compute_profile_squared_with_lifetimes(
+ProfileWithLifetimesResult compute_profile_p_with_lifetimes(
     const std::vector<double>& R,
-    const std::vector<double>& B) {
+    const std::vector<double>& B,
+    int p) {
     validate_instance(R, B);
+    validate_p(p);
 
-    BalancedIntervalSquaredCostDataStructure query_ds(R, B);
+    BalancedIntervalCostDataStructure query_ds(R, B, p);
     const auto& all_points = query_ds.all_points();
     const int m_points = static_cast<int>(all_points.size());
 
@@ -948,6 +1060,18 @@ ProfileWithLifetimesResult compute_profile_squared_with_lifetimes(
     return result;
 }
 
+// Backward-compatible wrappers
+ProfileResult compute_profile_squared(const std::vector<double>& R,
+                                      const std::vector<double>& B) {
+    return compute_profile_p(R, B, 2);
+}
+
+ProfileWithLifetimesResult compute_profile_squared_with_lifetimes(
+    const std::vector<double>& R,
+    const std::vector<double>& B) {
+    return compute_profile_p_with_lifetimes(R, B, 2);
+}
+
 } // namespace slimfft
 
 #ifndef SLIMFFT_BUILD_PYTHON
@@ -975,8 +1099,18 @@ int main() {
         }
     }
 
+    int p = 2;
+    if (std::cin >> p) {
+        if (p < 1) {
+            std::cerr << "p must be positive.\n";
+            return 1;
+        }
+    } else {
+        std::cin.clear();
+    }
+
     try {
-        slimfft::ProfileResult result = slimfft::compute_profile_squared(R, B);
+        slimfft::ProfileResult result = slimfft::compute_profile_p(R, B, p);
         std::cout << std::setprecision(17);
         for (std::size_t i = 0; i < result.costs.size(); ++i) {
             if (i) std::cout << ' ';

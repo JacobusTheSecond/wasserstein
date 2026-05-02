@@ -1,6 +1,6 @@
 # Wasserstein Profile
 
-Code for computing Wasserstein matching profiles for red and blue point sets on the line.
+Code for computing the squared Wasserstein matching profiles for red and blue point sets on the line.
 
 The repository contains:
 - simple baseline implementations for correctness checks,

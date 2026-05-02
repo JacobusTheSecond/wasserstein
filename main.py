@@ -46,11 +46,9 @@ MARKEREDGEWIDTH = 0.7
 
 STYLE = {
     "naive": dict(color="#222222", marker="o"),   # black / dark gray
-    "FFT": dict(color="#009E73", marker="s"),
-    "slimFFT": dict(color="#CC79A7", marker="^"),
-    "slimFFT_c": dict(color="#D55E00", marker="D"),
-    "Ours": dict(color="#D55E00", marker="D"),    # vermillion
-    "competitor": dict(color="#009E73", marker="x"),
+    "FFT_py": dict(color="#009E73", marker="s"),
+    "slimFFT_py": dict(color="#CC79A7", marker="^"),
+    "FFT_c": dict(color="#D55E00", marker="D"),    # vermillion
     "Theirs": dict(color="#009E73", marker="x"),  # bluish green
 }
 
