@@ -1,7 +1,6 @@
 # Wasserstein Profile
 
 Code for computing Wasserstein matching profiles for red and blue point sets on the line.
-This code accompanies the paper 'Computing All Optimal Partial $p$-Wasserstein Matchings on the Line', currently in preparation, by Sebastian Angrick, Jacobus Conradi, Monika Csikos, Niko Hastrich, Danny Mittal, André Nusser, and Krzystof Onak.
 
 The repository contains:
 - simple baseline implementations for correctness checks,
