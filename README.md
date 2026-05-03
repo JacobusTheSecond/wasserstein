@@ -32,7 +32,7 @@ sudo apt-get install libfftw3-dev
 Then build and install the extension from the repository root:
 
 ```bash
-pip install -e wasserstein_profile
+pip install -e wasserstein_profile_pkg
 ```
 
 ## Running the experiments
