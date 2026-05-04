@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Sequence, Tuple
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Sequence, Tuple
 
+from dynamic_interval_set import DynamicIntervalSetSummary
 from models import CandidateEvaluation, CompactInterval, GreedyProfileResult, LightGreedyProfileResult, \
     LightCandidateEvaluation
 from mp_types import Point
@@ -73,79 +73,6 @@ def undo_delta_from_solution(
     validate_disjoint_sorted_intervals(updated)
     return updated
 
-def recover_all_solutions(
-    deltas: Sequence[LightCandidateEvaluation],
-) -> List[List["CompactInterval"]]:
-    """
-    Expensive on purpose. Only call this if you truly need every intermediate
-    solution materialized.
-    """
-    interval_set = DynamicIntervalSetSummary()
-    out: List[List["CompactInterval"]] = [interval_set.to_sorted_intervals()]
-    for i, delta in enumerate(deltas, start=1):
-        swallowed_cost, swallowed_pairs = interval_set.apply_interval(delta.merged_interval)
-        if swallowed_pairs != delta.swallowed_pairs:
-            raise ValueError(
-                f"Replay mismatch at step {i}: swallowed_pairs changed "
-                f"({swallowed_pairs} vs stored {delta.swallowed_pairs})."
-            )
-        out.append(interval_set.to_sorted_intervals())
-    return out
-
-def _find_subsumed_intervals_by_scan(
-    current_solution: Sequence[CompactInterval],
-    merged_interval: CompactInterval,
-) -> List[CompactInterval]:
-    """
-    Recover exactly which current intervals are swallowed by merged_interval.
-
-    This is only for offline conversion / debugging, so a scan is fine.
-    """
-    subsumed: List[CompactInterval] = []
-
-    for cur in current_solution:
-        red_disjoint = cur.red_end < merged_interval.red_start or merged_interval.red_end < cur.red_start
-        blue_disjoint = cur.blue_end < merged_interval.blue_start or merged_interval.blue_end < cur.blue_start
-
-        contained = (
-            merged_interval.red_start <= cur.red_start <= cur.red_end <= merged_interval.red_end
-            and merged_interval.blue_start <= cur.blue_start <= cur.blue_end <= merged_interval.blue_end
-        )
-
-        if red_disjoint and blue_disjoint:
-            continue
-        if contained:
-            subsumed.append(cur)
-        else:
-            raise ValueError(
-                "While converting light profile to full profile, found a partial overlap. "
-                "The light profile appears inconsistent."
-            )
-
-    return subsumed
-
-
-def _apply_full_delta_to_solution(
-    current_solution: Sequence[CompactInterval],
-    merged_interval: CompactInterval,
-) -> List[CompactInterval]:
-    """
-    Apply one accepted merged interval to the current reconstructed solution.
-    """
-    updated = [
-        cur
-        for cur in current_solution
-        if not (
-            merged_interval.red_start <= cur.red_start
-            and cur.red_end <= merged_interval.red_end
-            and merged_interval.blue_start <= cur.blue_start
-            and cur.blue_end <= merged_interval.blue_end
-        )
-    ]
-    updated.append(merged_interval)
-    updated.sort(key=lambda x: (x.red_start, x.blue_start))
-    return updated
-
 def light_to_full_greedy_profile(
     light_profile: LightGreedyProfileResult,
 ) -> GreedyProfileResult:
@@ -185,19 +112,10 @@ def light_to_full_greedy_profile(
     )
 
 
-from typing import List, Sequence
-
-from dynamic_interval_set import DynamicIntervalSetSummary
-from models import CompactInterval, LightCandidateEvaluation
-
-
 def recover_solution_at_k(
     deltas: Sequence[LightCandidateEvaluation],
     k: int,
 ) -> List[CompactInterval]:
-    """
-    Reconstruct the solution after k accepted light deltas by replaying them.
-    """
     if not (0 <= k <= len(deltas)):
         raise ValueError(f"k must lie in [0, {len(deltas)}].")
 

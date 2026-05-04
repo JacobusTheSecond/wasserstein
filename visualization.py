@@ -197,29 +197,3 @@ def describe_solution_step(profile: GreedyProfileResult, k: int) -> str:
     lines.append(f"new interval size = {delta.merged_interval.size}")
     return " | ".join(lines)
 
-
-def _profile_solution_at(profile, k: int):
-    """
-    Support both full GreedyProfileResult and LightGreedyProfileResult.
-    """
-    if hasattr(profile, "solution_at"):
-        return profile.solution_at(k)
-    if hasattr(profile, "deltas"):
-        return recover_solution_at_k(profile.deltas, k)
-    raise TypeError("Profile does not support solution recovery.")
-
-def plot_solution_at_k(
-    R: Sequence[Point],
-    B: Sequence[Point],
-    profile: GreedyProfileResult,
-    k: int,
-    *,
-    ax=None,
-    show_pairs: bool = True,
-) -> None:
-    intervals = _profile_solution_at(profile, k)
-    plot_solution(R, B, intervals, ax=ax, title=describe_solution_step(profile, k), show_pairs=show_pairs)
-
-
-def make_stepper(R: Sequence[Point], B: Sequence[Point], profile: GreedyProfileResult) -> GreedyProfileStepper:
-    return GreedyProfileStepper(R, B, profile)
