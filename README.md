@@ -54,7 +54,7 @@ Each panel benchmarks the algorithms for multiplicatively increasing `n` until e
 
 ## Competitor implementation
 
-The file `competition.py` contains the competitor implementation used in the runtime comparisons. It is copied from the [code](https://github.com/rtavenar/partial_ot_1d) provided in the ICLR'25 paper [One for all and all for one: Efficient Computation of
+The file `competition.py` contains the competitor implementation used in the runtime comparisons. It is copied from the [code](https://github.com/rtavenar/partial_ot_1d) (commit `849e82e`) provided in the ICLR'25 paper [One for all and all for one: Efficient Computation of
 Partial Wasserstein Distances on the Line](https://openreview.net/forum?id=kzEPsHbJDv) by Laetitia Chapel and Romain Tavenard.
 This code is included here for benchmarking and experimental comparison.
 
